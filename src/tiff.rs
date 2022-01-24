@@ -24,16 +24,16 @@
 // SUCH DAMAGE.
 //
 
-use std::fmt;
 use mutate_once::MutOnce;
+use std::fmt;
 
-use crate::endian::{Endian, BigEndian, LittleEndian};
+use crate::endian::{BigEndian, Endian, LittleEndian};
 use crate::error::Error;
 use crate::tag::{Context, Tag, UnitPiece};
-use crate::value;
-use crate::value::Value;
-use crate::value::get_type_info;
 use crate::util::{atou16, ctou32};
+use crate::value;
+use crate::value::get_type_info;
+use crate::value::Value;
 
 // TIFF header magic numbers [EXIF23 4.5.2].
 const TIFF_BE: u16 = 0x4d4d;
@@ -85,14 +85,17 @@ impl IfdEntry {
     }
 
     // Converts a partially parsed value into a real one.
-    fn parse_value<E>(value: &mut Value, data: &[u8]) where E: Endian {
+    fn parse_value<E>(value: &mut Value, data: &[u8])
+    where
+        E: Endian,
+    {
         match *value {
             Value::Unknown(typ, cnt, ofs) => {
                 let (unitlen, parser) = get_type_info::<E>(typ);
                 if unitlen != 0 {
                     *value = parser(data, ofs as usize, cnt as usize);
                 }
-            },
+            }
             _ => panic!("value is already parsed"),
         }
     }
@@ -154,7 +157,13 @@ pub fn parse_exif(data: &[u8]) -> Result<(Vec<Field>, bool), Error> {
     let mut parser = Parser::new();
     parser.parse(data)?;
     let (entries, le) = (parser.entries, parser.little_endian);
-    Ok((entries.into_iter().map(|e| e.into_field(data, le)).collect(), le))
+    Ok((
+        entries
+            .into_iter()
+            .map(|e| e.into_field(data, le))
+            .collect(),
+        le,
+    ))
 }
 
 #[derive(Debug)]
@@ -165,7 +174,10 @@ pub struct Parser {
 
 impl Parser {
     pub fn new() -> Self {
-        Self { entries: Vec::new(), little_endian: false }
+        Self {
+            entries: Vec::new(),
+            little_endian: false,
+        }
     }
 
     pub fn parse(&mut self, data: &[u8]) -> Result<(), Error> {
@@ -177,17 +189,19 @@ impl Parser {
             TIFF_BE => {
                 self.little_endian = false;
                 self.parse_sub::<BigEndian>(data)
-            },
+            }
             TIFF_LE => {
                 self.little_endian = true;
                 self.parse_sub::<LittleEndian>(data)
-            },
+            }
             _ => Err(Error::InvalidFormat("Invalid TIFF byte order")),
         }
     }
 
-    fn parse_sub<E>(&mut self, data: &[u8])
-                    -> Result<(), Error> where E: Endian {
+    fn parse_sub<E>(&mut self, data: &[u8]) -> Result<(), Error>
+    where
+        E: Endian,
+    {
         // Parse the rest of the header (42 and the IFD offset).
         if E::loadu16(data, 2) != TIFF_FORTY_TWO {
             return Err(Error::InvalidFormat("Invalid forty two"));
@@ -195,24 +209,29 @@ impl Parser {
         let mut ifd_offset = E::loadu32(data, 4) as usize;
         let mut ifd_num_ck = Some(0);
         while ifd_offset != 0 {
-            let ifd_num = ifd_num_ck
-                .ok_or(Error::InvalidFormat("Too many IFDs"))?;
+            let ifd_num = ifd_num_ck.ok_or(Error::InvalidFormat("Too many IFDs"))?;
             // Limit the number of IFDs to defend against resource exhaustion
             // attacks.
             if ifd_num >= 8 {
                 return Err(Error::InvalidFormat("Limit the IFD count to 8"));
             }
-            ifd_offset = self.parse_ifd::<E>(
-                data, ifd_offset, Context::Tiff, ifd_num)?;
+            ifd_offset = self.parse_ifd::<E>(data, ifd_offset, Context::Tiff, ifd_num)?;
             ifd_num_ck = ifd_num.checked_add(1);
         }
         Ok(())
     }
 
     // Parse IFD [EXIF23 4.6.2].
-    fn parse_ifd<E>(&mut self, data: &[u8],
-                    offset: usize, ctx: Context, ifd_num: u16)
-                    -> Result<usize, Error> where E: Endian {
+    fn parse_ifd<E>(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+        ctx: Context,
+        ifd_num: u16,
+    ) -> Result<usize, Error>
+    where
+        E: Endian,
+    {
         // Count (the number of the entries).
         if data.len() < offset || data.len() - offset < 2 {
             return Err(Error::InvalidFormat("Truncated IFD count"));
@@ -229,8 +248,9 @@ impl Parser {
             let cnt = E::loadu32(data, offset + 2 + i * 12 + 4);
             let valofs_at = offset + 2 + i * 12 + 8;
             let (unitlen, _parser) = get_type_info::<E>(typ);
-            let vallen = unitlen.checked_mul(cnt as usize).ok_or(
-                Error::InvalidFormat("Invalid entry count"))?;
+            let vallen = unitlen
+                .checked_mul(cnt as usize)
+                .ok_or(Error::InvalidFormat("Invalid entry count"))?;
             let mut val = if vallen <= 4 {
                 Value::Unknown(typ, cnt, valofs_at as u32)
             } else {
@@ -245,14 +265,23 @@ impl Parser {
             // recursively defined.
             let tag = Tag(ctx, tag);
             match tag {
-                Tag::ExifIFDPointer => self.parse_child_ifd::<E>(
-                    data, &mut val, Context::Exif, ifd_num)?,
-                Tag::GPSInfoIFDPointer => self.parse_child_ifd::<E>(
-                    data, &mut val, Context::Gps, ifd_num)?,
-                Tag::InteropIFDPointer => self.parse_child_ifd::<E>(
-                    data, &mut val, Context::Interop, ifd_num)?,
-                _ => self.entries.push(IfdEntry { field: Field {
-                    tag: tag, ifd_num: In(ifd_num), value: val }.into()}),
+                Tag::ExifIFDPointer => {
+                    self.parse_child_ifd::<E>(data, &mut val, Context::Exif, ifd_num)?
+                }
+                Tag::GPSInfoIFDPointer => {
+                    self.parse_child_ifd::<E>(data, &mut val, Context::Gps, ifd_num)?
+                }
+                Tag::InteropIFDPointer => {
+                    self.parse_child_ifd::<E>(data, &mut val, Context::Interop, ifd_num)?
+                }
+                _ => self.entries.push(IfdEntry {
+                    field: Field {
+                        tag: tag,
+                        ifd_num: In(ifd_num),
+                        value: val,
+                    }
+                    .into(),
+                }),
             }
         }
 
@@ -261,20 +290,33 @@ impl Parser {
             return Err(Error::InvalidFormat("Truncated next IFD offset"));
         }
         let next_ifd_offset = E::loadu32(data, offset + 2 + count * 12);
-        Ok(next_ifd_offset as usize)
+        if next_ifd_offset as usize > data.len() {
+            eprintln!("Invalid IDF offset :{}", next_ifd_offset);
+            Ok(0)
+        } else {
+            Ok(next_ifd_offset as usize)
+        }
     }
 
-    fn parse_child_ifd<E>(&mut self, data: &[u8],
-                          pointer: &mut Value, ctx: Context, ifd_num: u16)
-                          -> Result<(), Error> where E: Endian {
+    fn parse_child_ifd<E>(
+        &mut self,
+        data: &[u8],
+        pointer: &mut Value,
+        ctx: Context,
+        ifd_num: u16,
+    ) -> Result<(), Error>
+    where
+        E: Endian,
+    {
         // The pointer is not yet parsed, so do it here.
         IfdEntry::parse_value::<E>(pointer, data);
 
         // A pointer field has type == LONG and count == 1, so the
         // value (IFD offset) must be embedded in the "value offset"
         // element of the field.
-        let ofs = pointer.get_uint(0).ok_or(
-            Error::InvalidFormat("Invalid pointer"))? as usize;
+        let ofs = pointer
+            .get_uint(0)
+            .ok_or(Error::InvalidFormat("Invalid pointer"))? as usize;
         match self.parse_ifd::<E>(data, ofs, ctx, ifd_num)? {
             0 => Ok(()),
             _ => Err(Error::InvalidFormat("Unexpected next IFD")),
@@ -322,8 +364,12 @@ impl DateTime {
             return Err(Error::BlankValue("DateTime is blank"));
         } else if data.len() < 19 {
             return Err(Error::InvalidFormat("DateTime too short"));
-        } else if !(data[4] == b':' && data[7] == b':' && data[10] == b' ' &&
-                    data[13] == b':' && data[16] == b':') {
+        } else if !(data[4] == b':'
+            && data[7] == b':'
+            && data[10] == b' '
+            && data[13] == b':'
+            && data[16] == b':')
+        {
             return Err(Error::InvalidFormat("Invalid DateTime delimiter"));
         }
         Ok(DateTime {
@@ -386,9 +432,11 @@ impl DateTime {
 
 impl fmt::Display for DateTime {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-               self.year, self.month, self.day,
-               self.hour, self.minute, self.second)
+        write!(
+            f,
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            self.year, self.month, self.day, self.hour, self.minute, self.second
+        )
     }
 }
 
@@ -459,8 +507,10 @@ pub struct DisplayValue<'a> {
 
 impl<'a> DisplayValue<'a> {
     #[inline]
-    pub fn with_unit<T>(&self, unit_provider: T)
-                        -> DisplayValueUnit<'a, T> where T: ProvideUnit<'a> {
+    pub fn with_unit<T>(&self, unit_provider: T) -> DisplayValueUnit<'a, T>
+    where
+        T: ProvideUnit<'a>,
+    {
         DisplayValueUnit {
             ifd_num: self.ifd_num,
             value_display: self.value_display,
@@ -478,14 +528,20 @@ impl<'a> fmt::Display for DisplayValue<'a> {
 }
 
 /// Helper struct for printing a value with its unit.
-pub struct DisplayValueUnit<'a, T> where T: ProvideUnit<'a> {
+pub struct DisplayValueUnit<'a, T>
+where
+    T: ProvideUnit<'a>,
+{
     ifd_num: In,
     value_display: value::Display<'a>,
     unit: Option<&'static [UnitPiece]>,
     unit_provider: T,
 }
 
-impl<'a, T> fmt::Display for DisplayValueUnit<'a, T> where T: ProvideUnit<'a> {
+impl<'a, T> fmt::Display for DisplayValueUnit<'a, T>
+where
+    T: ProvideUnit<'a>,
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(unit) = self.unit {
             assert!(!unit.is_empty());
@@ -493,15 +549,15 @@ impl<'a, T> fmt::Display for DisplayValueUnit<'a, T> where T: ProvideUnit<'a> {
                 match *piece {
                     UnitPiece::Value => self.value_display.fmt(f),
                     UnitPiece::Str(s) => f.write_str(s),
-                    UnitPiece::Tag(tag) =>
-                        if let Some(x) = self.unit_provider.get_field(
-                                tag, self.ifd_num) {
+                    UnitPiece::Tag(tag) => {
+                        if let Some(x) = self.unit_provider.get_field(tag, self.ifd_num) {
                             x.value.display_as(tag).fmt(f)
                         } else if let Some(x) = tag.default_value() {
                             x.display_as(tag).fmt(f)
                         } else {
                             write!(f, "[{} missing]", tag)
-                        },
+                        }
+                    }
                 }?
             }
             Ok(())
@@ -550,9 +606,9 @@ mod tests {
 
     #[test]
     fn truncated() {
-        let mut data =
-            b"MM\0\x2a\0\0\0\x08\
-              \0\x01\x01\0\0\x03\0\0\0\x01\0\x14\0\0\0\0\0\0".to_vec();
+        let mut data = b"MM\0\x2a\0\0\0\x08\
+              \0\x01\x01\0\0\x03\0\0\0\x01\0\x14\0\0\0\0\0\0"
+            .to_vec();
         parse_exif(&data).unwrap();
         while let Some(_) = data.pop() {
             parse_exif(&data).unwrap_err();
@@ -565,8 +621,10 @@ mod tests {
     fn inf_loop_by_next() {
         let data = b"MM\0\x2a\0\0\0\x08\
                      \0\x01\x01\0\0\x03\0\0\0\x01\0\x14\0\0\0\0\0\x08";
-        assert_err_pat!(parse_exif(data),
-                        Error::InvalidFormat("Limit the IFD count to 8"));
+        assert_err_pat!(
+            parse_exif(data),
+            Error::InvalidFormat("Limit the IFD count to 8")
+        );
     }
 
     #[test]
@@ -576,8 +634,10 @@ mod tests {
                      \x00\x00\x00\x00\
                      \x00\x01\x90\x00\x00\x07\x00\x00\x00\x040231\
                      \x00\x00\x00\x08";
-        assert_err_pat!(parse_exif(data),
-                        Error::InvalidFormat("Unexpected next IFD"));
+        assert_err_pat!(
+            parse_exif(data),
+            Error::InvalidFormat("Unexpected next IFD")
+        );
     }
 
     #[test]
@@ -644,24 +704,24 @@ mod tests {
             ifd_num: In::PRIMARY,
             value: Value::Undefined(b"0231".to_vec(), 0),
         };
-        assert_eq!(exifver.display_value().to_string(),
-                   "2.31");
-        assert_eq!(exifver.display_value().with_unit(()).to_string(),
-                   "2.31");
-        assert_eq!(exifver.display_value().with_unit(&cm).to_string(),
-                   "2.31");
+        assert_eq!(exifver.display_value().to_string(), "2.31");
+        assert_eq!(exifver.display_value().with_unit(()).to_string(), "2.31");
+        assert_eq!(exifver.display_value().with_unit(&cm).to_string(), "2.31");
         // Fixed string.
         let width = Field {
             tag: Tag::ImageWidth,
             ifd_num: In::PRIMARY,
             value: Value::Short(vec![257]),
         };
-        assert_eq!(width.display_value().to_string(),
-                   "257");
-        assert_eq!(width.display_value().with_unit(()).to_string(),
-                   "257 pixels");
-        assert_eq!(width.display_value().with_unit(&cm).to_string(),
-                   "257 pixels");
+        assert_eq!(width.display_value().to_string(), "257");
+        assert_eq!(
+            width.display_value().with_unit(()).to_string(),
+            "257 pixels"
+        );
+        assert_eq!(
+            width.display_value().with_unit(&cm).to_string(),
+            "257 pixels"
+        );
         // Unit tag (with a non-default value).
         // Unit tag is missing but the default is specified.
         let xres = Field {
@@ -669,27 +729,34 @@ mod tests {
             ifd_num: In::PRIMARY,
             value: Value::Rational(vec![(300, 1).into()]),
         };
-        assert_eq!(xres.display_value().to_string(),
-                   "300");
-        assert_eq!(xres.display_value().with_unit(()).to_string(),
-                   "300 pixels per inch");
-        assert_eq!(xres.display_value().with_unit(&cm).to_string(),
-                   "300 pixels per cm");
-        assert_eq!(xres.display_value().with_unit(&cm_tn).to_string(),
-                   "300 pixels per inch");
+        assert_eq!(xres.display_value().to_string(), "300");
+        assert_eq!(
+            xres.display_value().with_unit(()).to_string(),
+            "300 pixels per inch"
+        );
+        assert_eq!(
+            xres.display_value().with_unit(&cm).to_string(),
+            "300 pixels per cm"
+        );
+        assert_eq!(
+            xres.display_value().with_unit(&cm_tn).to_string(),
+            "300 pixels per inch"
+        );
         // Unit tag is missing and the default is not specified.
         let gpslat = Field {
             tag: Tag::GPSLatitude,
             ifd_num: In::PRIMARY,
-            value: Value::Rational(vec![
-                (10, 1).into(), (0, 1).into(), (1, 10).into()]),
+            value: Value::Rational(vec![(10, 1).into(), (0, 1).into(), (1, 10).into()]),
         };
-        assert_eq!(gpslat.display_value().to_string(),
-                   "10 deg 0 min 0.1 sec");
-        assert_eq!(gpslat.display_value().with_unit(()).to_string(),
-                   "10 deg 0 min 0.1 sec [GPSLatitudeRef missing]");
-        assert_eq!(gpslat.display_value().with_unit(&cm).to_string(),
-                   "10 deg 0 min 0.1 sec [GPSLatitudeRef missing]");
+        assert_eq!(gpslat.display_value().to_string(), "10 deg 0 min 0.1 sec");
+        assert_eq!(
+            gpslat.display_value().with_unit(()).to_string(),
+            "10 deg 0 min 0.1 sec [GPSLatitudeRef missing]"
+        );
+        assert_eq!(
+            gpslat.display_value().with_unit(&cm).to_string(),
+            "10 deg 0 min 0.1 sec [GPSLatitudeRef missing]"
+        );
     }
 
     #[test]
